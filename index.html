@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>LPGT Cavern — Quản lý Công Ca</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<!-- ===== Thư viện ngoài ===== -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+
+<!-- ===== CSS ===== -->
+<link rel="stylesheet" href="css/app.css?v=100">
+<link rel="stylesheet" href="css/portal.css?v=100">
+<link rel="stylesheet" href="css/print.css?v=100">
+<link rel="stylesheet" href="css/ui.css?v=100">
+<style id="pageDyn">@page{size:A4 portrait;margin:8mm}</style>
+</head>
+<body class="locked">
+
+<!-- ============================================================
+     CỔNG ĐĂNG NHẬP — che toàn bộ app cho tới khi đăng nhập
+     ============================================================ -->
+<div class="gate" id="gate">
+  <div class="gate-card">
+    <div class="gate-logo">⛽</div>
+    <h1>LPGT Cavern</h1>
+    <p class="gate-sub">Quản lý Công Ca · Working Schedule</p>
+
+    <div class="fg">
+      <label class="fl" for="loginId">Mã nhân viên</label>
+      <input class="inp num" id="loginId" placeholder="44180062" inputmode="numeric" pattern="[0-9]*"
+             autocomplete="username" autocapitalize="off" spellcheck="false"
+             onkeydown="if(event.key==='Enter')$('loginPw').focus()">
+    </div>
+    <div class="fg">
+      <label class="fl" for="loginPw">Mật khẩu</label>
+      <div class="pw-wrap">
+        <input type="password" class="inp num" id="loginPw" inputmode="numeric"
+               autocomplete="current-password"
+               onkeydown="if(event.key==='Enter')doLogin()">
+        <button type="button" class="pw-eye" onclick="togglePw('loginPw',this)" title="Hiện/ẩn mật khẩu">👁</button>
+      </div>
+    </div>
+
+    <div class="gate-msg" id="gateMsg" style="display:none"></div>
+
+    <button class="btn gate-btn" id="gateBtn" onclick="doLogin()">Đăng nhập</button>
+
+    <p class="gate-hint">Chỉ nhập <b>phần số</b> của mã nhân viên (bỏ chữ đầu).<br>
+      Lần đầu đăng nhập: <b>mật khẩu = mã số</b> đó.
+      Vào rồi nhớ đổi mật khẩu ở mục <b>Tài khoản</b>.</p>
+
+    <div class="gate-status" id="gateStatus">
+      <span class="dot" id="gateDot"></span><span id="gateStatusTxt">Đang kết nối…</span>
+    </div>
+  </div>
+</div>
+
+<header class="hdr">
+  <div class="logo">⛽</div>
+  <div>
+    <h1>LPGT Cavern · Công Ca</h1>
+  </div>
+  <div class="sp"></div>
+  <span class="syncdot" id="syncDot" title="Trạng thái đồng bộ"></span>
+  <span id="syncTxt" hidden>Offline</span>
+  <button class="icobtn lang-btn" id="langBtn" data-noi18n title="Switch to English" onclick="toggleLang()">EN</button>
+  <!-- hr-only: quản trị / QL người Hàn / THƯ KÝ — xem applyRoleUI() ở js/13-portal.js -->
+  <button class="icobtn hr-only" title="Quản trị: Nhân sự · Lịch · Cài đặt" onclick="go('setup')">🛠️</button>
+  <button class="icobtn hr-only" title="Cài đặt hệ thống" onclick="go('setup');openSysBox()">⚙️</button>
+  <!-- Thư ký / quản lý người Hàn không có Trang chính nên đưa các nút này lên header.
+       Chuông PHẢI có ở đây: chuông vốn nằm trên Trang chính, mà họ không có
+       Trang chính nên trước đây không bao giờ thấy thông báo của app. -->
+  <button class="icobtn noself-only" id="hdrBell" title="Thông báo" onclick="openMyPanel('ntf')" style="display:none;position:relative">🔔<span class="bdg" id="hdrBellBdg" style="display:none">0</span></button>
+  <button class="icobtn noself-only" title="Tài khoản" onclick="openMyPanel('acc')" style="display:none">🔑</button>
+  <button class="icobtn noself-only" title="Đăng xuất" onclick="doLogout()" style="display:none">↪</button>
+</header>
+
+<!-- Băng nhắc "đang giữ thông báo" — hiện ở MỌI tab để không ai quên bấm gửi.
+     Dựng bởi renderHoldBar() trong js/06-calendar.js. -->
+<div class="holdbar" id="holdBar" style="display:none"></div>
+
+<!-- Desktop (≥768px): thanh tab ngang rút gọn -->
+<nav class="topbar" id="tabs">
+  <button class="tab on home-tab" data-v="me" onclick="go('me')"><span class="ic">🏠</span><span class="lb">Trang chính</span></button>
+  <button class="tab" data-v="cal" onclick="go('cal')"><span class="ic">📅</span>Lịch</button>
+  <button class="tab" data-v="appr" onclick="go('appr')" style="position:relative"><span class="ic">✅</span>Duyệt<span class="bdg" id="pendBdg" style="display:none">0</span></button>
+  <button class="tab rep-tab" data-v="rep" onclick="go('rep')"><span class="ic">📊</span>Báo cáo</button>
+</nav>
+
+<!-- Mobile (<768px): bottom bar 5 mục cố định đáy -->
+<nav class="bottombar" id="bottombar">
+  <button class="bb on home-tab" data-v="me" onclick="go('me')"><span class="ic">🏠</span><span class="lb">Trang chính</span></button>
+  <button class="bb" data-v="cal" onclick="go('cal')"><span class="ic">📅</span>Lịch</button>
+  <button class="bb rep-tab" data-v="rep" onclick="go('rep')"><span class="ic">📊</span>Báo cáo</button>
+  <button class="bb" data-v="appr" onclick="go('appr')"><span class="ic">✅</span>Duyệt<span class="bdg" id="pendBdgM" style="display:none">0</span></button>
+  <button class="bb" onclick="openMoreSheet()"><span class="ic">☰</span>Thêm</button>
+</nav>
+
+<div class="sheetmask" id="moreMask" onclick="if(event.target===this)closeMoreSheet()">
+  <div class="sheet">
+    <div class="bar"></div>
+    <button class="si self-only" onclick="closeMoreSheet();go('me');openDaySheet(todayIso())"><span class="ic">📝</span>Gửi đơn</button>
+    <!-- Chuông trong sheet "Thêm": trên ĐIỆN THOẠI các nút icon ở header bị ẩn,
+         nên đây là lối duy nhất vào Thông báo của thư ký / quản lý người Hàn. -->
+    <button class="si" onclick="closeMoreSheet();openMyPanel('ntf')" style="position:relative"><span class="ic">🔔</span>Thông báo<span class="bdg" id="sheetBellBdg" style="display:none;position:static;margin-left:auto">0</span></button>
+    <button class="si rep-tab" onclick="closeMoreSheet();go('rep')"><span class="ic">📊</span>Báo cáo</button>
+    <button class="si self-only" onclick="closeMoreSheet();openMyPanel('ot')"><span class="ic">⚡</span>Tăng ca của tôi</button>
+    <button class="si self-only" onclick="closeMoreSheet();openMyPanel('req')"><span class="ic">📋</span>Đơn của tôi</button>
+    <button class="si self-only" onclick="closeMoreSheet();openMyPanel('sum')"><span class="ic">📊</span>Bảng công</button>
+    <button class="si" onclick="closeMoreSheet();openMyPanel('acc')"><span class="ic">🔑</span>Tài khoản</button>
+    <button class="si hr-only" onclick="closeMoreSheet();go('setup')"><span class="ic">🛠️</span>Quản trị (Nhân sự · Lịch · Cài đặt)</button>
+    <button class="si pc-only" onclick="closeMoreSheet();openPrintBulk()" style="position:relative"><span class="ic">🖨️</span>In đơn<span class="bdg" id="printBdgSheet" style="display:none;position:static;margin-left:auto">0</span></button>
+    <button class="si" onclick="closeMoreSheet();doLogout()"><span class="ic">↪</span>Đăng xuất</button>
+  </div>
+</div>
+
+<!-- Sheet thao tác theo ngày (trang chính) -->
+<div class="sheetmask" id="daySheetMask" onclick="if(event.target===this)closeDaySheet()">
+  <div class="sheet day-sheet">
+    <div class="bar"></div>
+    <div id="daySheetBody"></div>
+  </div>
+</div>
+
+<!-- Sheet phụ: Tăng ca của tôi / Đơn của tôi / Tài khoản -->
+<div class="sheetmask" id="myPanelMask" onclick="if(event.target===this)closeMyPanel()">
+  <div class="sheet day-sheet">
+    <div class="bar"></div>
+    <div id="myPanelBody"></div>
+  </div>
+</div>
+
+<div class="sheetmask" id="legendMask" onclick="if(event.target===this)closeLegendSheet()">
+  <div class="sheet">
+    <div class="bar"></div>
+    <h3 style="margin-bottom:8px">Chú giải mã ca</h3>
+    <div class="legend" id="legendSheetBody" style="gap:10px 16px"></div>
+  </div>
+</div>
+
+<main class="wrap">
+
+<!-- ============ CỦA TÔI (nhân viên) ============ -->
+<section class="view" id="v-me">
+  <div id="meLogin" class="card login-card" style="display:none">
+    <h3>🔐 Chưa đăng nhập</h3>
+    <p class="muted">Đăng nhập bằng mã nhân viên để xem trang cá nhân.</p>
+    <button class="btn sec" onclick="doLogout()">Về màn hình đăng nhập</button>
+  </div>
+  <div id="meBody" style="display:none"></div>
+</section>
+
+<!-- ============ LỊCH (hợp nhất Chuẩn / Thực tế) ============ -->
+<section class="view on" id="v-cal">
+  <div class="card cal-bar" id="calBar">
+    <!-- Sub-tab: Lịch ca / Nhân lực theo ngày (Nhân lực chuyển từ tab Báo cáo sang) -->
+    <div class="seg keep-mp" id="calTabSeg">
+      <button class="on" data-ct="sched" onclick="setCalTab('sched')">📅 Lịch</button>
+      <button class="mgr-only" data-ct="mp" onclick="setCalTab('mp')">👥 Nhân lực</button>
+    </div>
+    <button class="btn sec sm" id="calPrevBtn" onclick="shiftCalMonth(-1)" title="Kỳ trước">◀</button>
+    <select class="inp sm" id="calMonth" style="font-weight:700" onchange="renderCal()"></select>
+    <button class="btn sec sm" id="calNextBtn" onclick="shiftCalMonth(1)" title="Kỳ sau">▶</button>
+    <div class="seg" id="calSeg">
+      <button class="on" data-m="std" onclick="setCalMode('std')">Chuẩn</button>
+      <button data-m="real" onclick="setCalMode('real')">Thực tế</button>
+    </div>
+    <select class="inp sm" id="calRange" onchange="renderCal()">
+      <option value="month">Cả kỳ (21→20)</option>
+      <option value="p1">21 → cuối tháng</option><option value="p2">01 → 10</option><option value="p3">11 → 20</option>
+    </select>
+    <select class="inp sm" id="calGroupFilter" style="max-width:170px" onchange="renderCal()">
+      <option value="__all">Tất cả nhóm</option>
+    </select>
+    <!-- "Khác chuẩn" = ô có ghi đè (đổi ca, nghỉ, tăng ca đã duyệt) HOẶC ô có
+         lịch đào tạo — người đi học thì hôm đó cũng không làm theo lịch chuẩn. -->
+    <label id="calDiffWrap" class="cal-chk" title="Ô có ghi đè lịch hoặc có buổi đào tạo"><input type="checkbox" id="realDiffOnly" onchange="renderCal()"> Chỉ ô khác chuẩn</label>
+    <span class="sp"></span>
+    <!-- Giữ thông báo để gửi gộp 1 lần — js/06-calendar.js (schedHold*).
+         Chỉ hiện ở chế độ xem Lịch THỰC TẾ, vì chỉ lịch thực tế mới sinh thông báo. -->
+    <button class="btn sec sm mgr-only" id="holdBtn" style="display:none" onclick="schedHoldToggle()"
+      title="Sửa lịch hàng loạt (nhập tàu, bảo dưỡng…) mà chỉ gửi đúng 1 tin gộp">🔕 Giữ thông báo</button>
+    <!-- Áp pattern ca thực tế — js/27-pattern.js. Chỉ hiện ở chế độ Thực tế:
+         ca chuẩn không nhận pattern, ca chuẩn là 4 nhóm cố định. -->
+    <button class="btn sec sm mgr-only" id="patBtn" style="display:none" onclick="openPatBox()"
+      title="Khai một chuỗi ca (vd D D D N N N R R) + ngày áp dụng, đổi hàng loạt nhiều ngày cho từng người">🔁 Áp pattern</button>
+    <!-- Ghi nhận ngày đặc biệt (nhập tàu, bảo dưỡng…) — js/20-events.js -->
+    <button class="btn sec sm hr-only" onclick="openEventMgr()" title="Đánh dấu ngày đặc biệt trên lịch và báo cho mọi người">📌 Sự kiện</button>
+    <!-- Gọi thẳng BẢNG tổng hợp sự kiện (lọc theo loại / theo kỳ) — js/20-events.js -->
+    <button class="btn sec sm hr-only" onclick="openEventMgr('','table')"
+      title="Xem lại toàn bộ sự kiện dưới dạng bảng, lọc theo loại và theo kỳ">📋 Bảng sự kiện</button>
+    <!-- Lịch nhập tàu nhiều phương án — js/25-vessel.js. Badge = số chuyến còn
+         phương án chưa chốt, để không ai quên chốt lại khi hãng báo giờ cập. -->
+    <button class="btn sec sm hr-only" id="vesselBtn" style="position:relative" onclick="openVesselMgr()"
+      title="Khai 2–3 phương án ngày cập, cả tổ nắm trước; có lịch chốt thì bấm Chốt">🚢 Lịch tàu<span class="bdg" id="vesselBdg" style="display:none;position:static;margin-left:6px">0</span></button>
+    <!-- Khai nghỉ việc — js/28-stdshift.js. Đặt ở thanh LỊCH vì người ta nhận
+         ra "anh này nghỉ rồi" lúc đang nhìn bảng ca, không phải lúc vào màn
+         quản trị. Khai xong lịch từ hôm sau trắng ngay tại đây. -->
+    <button class="btn sec sm hr-only" onclick="openLeaveBox()"
+      title="Chọn người và ngày làm việc cuối cùng — lịch từ hôm sau trắng, sang kỳ sau tự gỡ khỏi danh sách">🚪 Khai nghỉ việc</button>
+    <!-- Xếp lịch đào tạo — js/22-training.js. Quản trị / SC / thư ký / QL người Hàn
+         xếp cho cả tổ; nhân viên thường vào bằng nút ở Trang chính để tự khai. -->
+    <button class="btn sec sm secr-only" id="trainBtn" style="position:relative" onclick="openTrainMgr()"
+      title="Xếp lịch đào tạo, đánh dấu trên bảng ca và báo cho từng người">🎓 Đào tạo<span class="bdg" id="trainBdg" style="display:none;position:static;margin-left:6px">0</span></button>
+    <!-- Thu/Mở và "Theo ngày" là của bố cục thẻ tuần trên máy tính.
+         Điện thoại có bố cục lịch tuần riêng (renderCalWeekGrid) nên ẩn đi. -->
+    <button class="btn sec sm pc-only" id="calCollapseAllBtn" onclick="calCollapseAll()">Thu/Mở</button>
+    <button class="btn sec sm pc-only" onclick="toggleCalMobileView()" id="calViewToggle">👁 Theo ngày</button>
+    <button class="btn sec sm" onclick="openLegendSheet()" title="Chú giải mã ca">❔ Chú giải</button>
+    <!-- Cơm phát sinh: so lịch chuẩn (bếp đã đặt) với lịch thực tế (js/19-meal.js) — ai cũng xem được -->
+    <button class="btn sm" id="mealBtn" style="position:relative;background:var(--cOT)" onclick="openMealPlan()" title="So lịch chuẩn (bếp đã đặt) với lịch thực tế để biết phải đặt thêm hay báo bớt">🍚 Cơm phát sinh<span class="bdg" id="mealBdg" style="display:none;position:static;margin-left:6px">0</span></button>
+    <button class="btn sm pc-only" id="calPrintBtn" style="position:relative" onclick="openPrintBulk()" title="In đơn đã duyệt">🖨️ In đơn<span class="bdg" id="printBdgCal" style="display:none;position:static;margin-left:6px">0</span></button>
+  </div>
+
+  <div class="sched-wrap cal-desktop"><div class="mtx-scroll" id="mtxBox"></div></div>
+  <div id="calWeekBox" class="cal-mobile"></div>
+  <div id="calDayBox" class="cal-mobile" style="display:none"></div>
+  <!-- Điện thoại: LỊCH TUẦN dạng lưới người × 7 ngày (js/06-calendar.js) -->
+  <div id="calWkGrid" class="cal-mobile" style="display:none"></div>
+  <!-- Sub-tab Nhân lực (chuyển từ tab Báo cáo sang, js/15-report.js) -->
+  <div id="calMpPanel" style="display:none"></div>
+</section>
+
+<!-- ============ QUẢN TRỊ: CA CHUẨN · NHÂN SỰ · CÀI ĐẶT (★ v9.6) ============ -->
+<section class="view" id="v-setup">
+
+  <!-- Toàn bộ màn Ca chuẩn do js/28-stdshift.js dựng vào đây.
+       Bản v9.5 có bốn khối rời cho cùng một việc (thanh Tạo/điền lịch, băng
+       Cơ cấu tổ, thanh cụm cột, bảng dải chặng mỗi người một dòng). Nay còn
+       một: mỗi nhóm một kiểu ca + một mốc, và một nút Tạo. -->
+  <div id="stdBox"></div>
+
+  <!-- 5) Cài đặt hệ thống & dữ liệu — gộp từ tab ⚙️ Dữ liệu cũ, gập lại cho gọn -->
+  <details class="xp hr-sys"><summary>⚙️ Cài đặt hệ thống &amp; dữ liệu</summary>
+
+  <div class="card">
+    <h3>📤 Export Excel</h3>
+    <div class="row">
+      <select class="inp" id="expMonth" style="width:auto"></select>
+      <select class="inp" id="expWhat" style="width:auto">
+        <option value="eff">Ca thực tế (chuẩn + sửa tay)</option>
+        <option value="base">Bảng ca chuẩn</option>
+      </select>
+      <button class="btn ok" onclick="exportXlsx()">Xuất .xlsx</button>
+    </div>
+  </div>
+
+  <!-- BẢO MẬT HỆ THỐNG — chỉ Quản trị / QL người Hàn. Thư ký không thấy thẻ này:
+       đổi cấu hình Firebase là đổi cả kho dữ liệu của công ty. -->
+  <div class="card admin-only">
+    <h3>☁️ Kết nối Firebase (đồng bộ nhiều máy)</h3>
+    <p class="muted" style="margin-bottom:8px">App tự kết nối Firebase theo cấu hình trong <code>js/config.js</code> khi mở. Muốn dùng dự án khác thì dán <b>firebaseConfig</b> (JSON) vào ô dưới rồi Lưu &amp; kết nối (chỉ áp dụng cho máy này).</p>
+    <textarea class="inp" id="fbCfg" rows="4" placeholder='{"apiKey":"...","databaseURL":"https://xxx.firebaseio.com",...}' style="font-family:var(--mono);font-size:12px"></textarea>
+    <div class="row" style="margin-top:9px">
+      <button class="btn" onclick="saveFbCfg()">Lưu &amp; kết nối</button>
+      <button class="btn sec" onclick="clearFbCfg()">Về mặc định</button>
+      <button class="btn ok" onclick="fbResync()" title="Đọc lại toàn bộ dữ liệu máy chủ và khớp lại máy này">🔄 Đồng bộ lại</button>
+      <span class="muted" id="fbStatus"></span>
+    </div>
+    <p class="muted" style="margin-top:8px">Nghi ngờ máy này lệch với máy khác (đơn đã xoá vẫn hiện, sửa lịch không thấy) thì bấm <b>Đồng bộ lại</b>: máy chủ là bản đúng, máy này khớp theo.</p>
+  </div>
+
+  <!-- ★ v6.8 — sổ chờ bản tin Zalo 08:00. Xem js/21-notify.js -->
+  <div class="card hr-only">
+    <h3>🌅 Bản tin Zalo gom lúc 08:00</h3>
+    <p class="muted" style="margin-bottom:8px">Đơn <b>Tăng ca · Làm liên tục nhiều ngày · Đi trễ/Về sớm · Bổ sung công</b> không bắn Zalo ngay từng cái nữa. Chúng nằm ở sổ chờ dưới đây, đến <b>08:00</b> hôm sau máy nào mở app trước sẽ gom thành <b>một tin mỗi thể loại</b>. Việc gấp (đổi ca, OT cover, sửa lịch) vẫn báo ngay như cũ.</p>
+    <p class="muted" style="margin-bottom:8px">Sổ chờ <b>chỉ nhận đơn mới phát sinh</b>: mỗi mục là một thông báo <b>chưa gửi lần nào</b>, gửi xong là xoá khỏi sổ. Đây không phải bản gom lại các đơn đã có trong màn Duyệt — đơn cũ, đơn đã duyệt từ trước không bao giờ bị gửi lại. Đơn bị huỷ hoặc đã duyệt xong trước 08:00 cũng tự rơi khỏi sổ.</p>
+    <!-- ★ v8.1 — gói riêng của cấp cuối. Xem js/21-notify.js (dgReviewLines). -->
+    <p class="muted" style="margin-bottom:8px">Riêng <b>Quản lý người Hàn</b> nhận <b>một bản review tổng</b> mỗi sáng: mọi đơn cần họ xem — kể cả đơn đang chờ Section Chief — gom vào đúng một tin, mở đầu bằng bảng tổng quan (mỗi loại đơn mấy cái, tăng ca tổng bao nhiêu giờ), rồi từng loại một khối xếp theo ngày. <b>Không</b> có tin lẻ bắn tới họ trong ngày.</p>
+    <div class="row" style="margin-top:9px">
+      <span class="muted">Chưa gửi lần nào: <b id="digestN">0</b> mục</span>
+      <span class="muted" id="digestLast"></span>
+      <span class="sp"></span>
+      <button class="btn sec" onclick="digestSendNow()" title="Không đợi 08:00, gửi bản tin gom ngay bây giờ">📨 Gửi ngay bản tin gom</button>
+    </div>
+  </div>
+
+  <!-- ★ v9.9 — bản tin HR mỗi sáng. Xem js/21-notify.js (hrPend*) -->
+  <div class="card hr-only">
+    <h3>📋 Bản tin HR — đơn đã duyệt mà chưa tích &quot;đã nhập HR&quot;</h3>
+    <p class="muted" style="margin-bottom:8px">Mỗi sáng <b>08:00</b>, phần mềm <b>quét lại</b> toàn bộ đơn của <b>kỳ công đang chạy</b> và gửi lên Zalo một tin liệt kê <b>mọi đơn đã DUYỆT CHỐT mà chưa ai bấm ✅ &quot;Đã nhập hệ thống HR&quot;</b>, xếp <b>theo loại đơn</b>, trong mỗi loại kê từng người. Tin ghi rõ đây là việc của <b>thư ký</b>.</p>
+    <p class="muted" style="margin-bottom:8px">Khác với bản tin gom ở trên: đây <b>không phải sổ chờ sự kiện</b> mà là một phép <b>quét lại</b> — một đơn chưa tích HR sẽ được nhắc <b>lặp lại mỗi ngày</b> cho tới khi có người bấm tick, nên cuối kỳ không còn sót. Đơn còn chờ duyệt và đơn bị từ chối <b>không</b> vào tin này.</p>
+    <div class="row" style="margin-top:9px">
+      <span class="muted">Đang chờ nhập HR: <b id="hrPendN">0</b> đơn</span>
+      <span class="muted" id="hrPendLast"></span>
+      <span class="sp"></span>
+      <button class="btn sec" onclick="hrPendSendNow()" title="Không đợi 08:00, gửi bản tin HR ngay bây giờ">📨 Gửi ngay bản tin HR</button>
+    </div>
+  </div>
+
+  <div class="card" id="hoursCard">
+    <h3>⏱️ Khai báo giờ công theo mã ca</h3>
+    <p class="muted" style="margin-bottom:8px">Số giờ dùng cho tab <b>📊 Thống kê</b>. Có thể chỉnh giờ từng mã hoặc <b>thêm mã ca mới</b> (mã mới sẽ xuất hiện trong bảng chọn ca khi sửa lịch / đăng ký).</p>
+    <div style="overflow:auto"><table class="tbl" id="hoursTbl"></table></div>
+    <div class="row" style="margin-top:9px"><button class="btn sec sm" onclick="addCustomCode()">＋ Thêm mã ca mới</button></div>
+  </div>
+
+  <div class="card" id="accCard">
+    <h3>👤 Tài khoản đăng nhập và phân quyền
+      <span style="flex:1"></span>
+      <button class="btn sec sm admin-only" onclick="addAccountRow()">＋ Thêm người</button></h3>
+    <p class="muted" style="margin-bottom:8px">Đây là nơi duy nhất quản lý người dùng: mã NV, họ tên, nhóm, kiểu ca, quyền và mật khẩu.</p>
+    <p class="muted" style="margin-bottom:8px">Nhân viên đăng nhập bằng mã số và mật khẩu; lần đầu mật khẩu chính là mã số. Mật khẩu lưu dạng băm PBKDF2 có muối nên không xem lại được — quên thì đặt lại. Xem thêm file BAO-MAT.md.</p>
+    <p class="muted" style="margin-bottom:8px">Thư ký xem được bảng này để đối chiếu nhưng không sửa: đổi quyền và đặt lại mật khẩu là việc của Quản trị. Thư ký thêm hoặc bớt người ở tab <b>🛠️ Nhóm &amp; Lịch</b>.</p>
+    <div class="hint" style="margin-bottom:9px">
+      <p>Quyền: Nhân viên chỉ xem lịch của mình và gửi đơn. Thư ký quản lý nhân lực và bảng công ca như Quản trị — thêm bớt người, tạo lịch cả kỳ, sửa lịch thực tế, xem hết báo cáo, in đơn, khai hộ — nhưng không duyệt đơn và không sửa mật khẩu hay phân quyền. Duyệt đơn có quyền duyệt và sửa lịch thực tế. Quản trị toàn quyền. Quản lý người Hàn như Quản trị nhưng giao diện mặc định tiếng Anh.</p>
+      <p style="margin-top:5px">Người không nằm trong lịch ca như thư ký hay quản lý cấp trên thì đặt Kiểu ca là Không xếp lịch — vẫn có tài khoản, không hiện trong bảng lịch.</p>
+    </div>
+    <div style="overflow:auto"><table class="tbl" id="accTbl"></table></div>
+  </div>
+
+  <!-- Uỷ quyền phê duyệt cấp cuối — js/01-core.js (dữ liệu) + js/10-account.js (giao diện) -->
+  <div class="card admin-only" id="kdCard">
+    <h3>🔑 Uỷ quyền phê duyệt cấp cuối</h3>
+    <p class="muted" style="margin-bottom:8px">Khi <b>Quản lý người Hàn</b> nghỉ phép hoặc đi công tác, bật công tắc này để một người khác duyệt thay ở <b>cấp cuối</b> (chốt lịch chính thức). Chỉ chuyển quyền <b>duyệt đơn</b> — không kèm quyền sửa lịch gốc hay sửa tài khoản. Tắt công tắc là quyền trả về ngay.</p>
+    <div id="kdBox"></div>
+  </div>
+
+  <div class="card">
+    <h3>🖨️ Cài đặt in đơn</h3>
+    <div class="grid2">
+      <div class="fg"><label class="fl">Bộ phận (Department) mặc định</label><input class="inp" id="setDeptDefault" onchange="S.settings.deptDefault=this.value;save()"></div>
+      <div class="fg"></div>
+      <div class="fg"><label class="fl">Phê duyệt bởi cấp trên trực tiếp</label><input class="inp" id="setApprover1" onchange="S.settings.approver1=this.value;save()"></div>
+      <div class="fg"><label class="fl">Phê duyệt bởi Trưởng Bộ Phận</label><input class="inp" id="setApprover2" onchange="S.settings.approver2=this.value;save()"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>✉️ Gửi email báo cáo (qua Outlook trên máy)</h3>
+    <p class="muted" style="margin-bottom:8px">Nhập sẵn địa chỉ nhận báo cáo. Ở tab <b>📊 Báo cáo → Thống kê</b> bấm <b>Gửi email báo cáo</b>, phần mềm mở ứng dụng thư mặc định (Outlook) với nội dung tóm tắt soạn sẵn để bạn kiểm tra rồi gửi.</p>
+    <div class="grid2">
+      <div class="fg"><label class="fl">Người nhận (To) — cách nhau bằng dấu ;</label><input class="inp" id="setMailTo" placeholder="nhansu@congty.com; sep@congty.com" onchange="S.settings.reportEmailTo=this.value;save()"></div>
+      <div class="fg"><label class="fl">CC (không bắt buộc)</label><input class="inp" id="setMailCc" placeholder="quanly@congty.com" onchange="S.settings.reportEmailCc=this.value;save()"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>⚙️ Cài đặt</h3>
+    <div class="grid2">
+      <div class="fg"><label class="fl">Tối thiểu ca ngày (D)</label><input type="number" class="inp" id="setMinD" min="0"></div>
+      <div class="fg"><label class="fl">Tối thiểu ca đêm (N)</label><input type="number" class="inp" id="setMinN" min="0"></div>
+      <div class="fg"><label class="fl">Trần giờ tăng ca / người / kỳ</label><input type="number" class="inp" id="setOtLimit" min="0" step="1" placeholder="40"></div>
+      <div class="fg"><label class="fl">Tối thiểu ca hành chính (O)</label><input type="number" class="inp" id="setMinO" min="0" placeholder="1"></div>
+      <!-- ★ v8.0 — yêu cầu vận hành tối thiểu: hai khung 12 giờ (08–20 và
+           20–08) lúc nào cũng phải có đủ ngần này KỸ SƯ tại chỗ. Người đang
+           đi đào tạo không được tính. Xem js/07-manpower.js. -->
+      <div class="fg"><label class="fl">Tối thiểu kỹ sư mỗi khung 12h (08–20 · 20–08)</label><input type="number" class="inp" id="setMinEng" min="0" placeholder="2"></div>
+      <div class="fg"><label class="fl">Tối đa người nghỉ / nhóm / ngày</label><input type="number" class="inp" id="setMaxOffTeam" min="0" placeholder="1"></div>
+      <!-- ★ v9.2 — cấp duyệt Field Engineer chỉ áp cho đơn của OPERATOR, và
+           người duyệt phải là FE cùng nhóm. Kỹ sư không bao giờ bị một kỹ sư
+           khác duyệt đơn. Ô này tắt hẳn cấp đó — xem js/01-core.js. -->
+      <div class="fg"><label class="fl">Cấp duyệt Field Engineer</label>
+        <label class="cal-chk" style="padding:8px 0"><input type="checkbox" id="setNoFeAppr">
+          Bỏ hẳn cấp Field Engineer — mọi đơn đi thẳng lên Section Chief</label></div>
+    </div>
+    <p class="muted" style="margin:4px 0 0">Vượt trần thì bảng Tổng quan phê duyệt sẽ tô đỏ và gắn cờ 🚨 (mặc định 40 giờ/tháng theo Bộ luật Lao động).</p>
+    <p class="muted" style="margin:4px 0 0"><b>Tối đa người nghỉ / nhóm / ngày</b> là tiêu chí chính của trợ lý duyệt đơn: cùng một nhóm mà số người đã nghỉ chạm mức này thì đơn tiếp theo trong ngày đó được khuyến nghị 🔴 <i>không nên duyệt</i>. Nhóm A/B/C/D là khối sản xuất, nhóm Office là khối văn phòng — hai khối tính tách bạch vì không trực thay ca cho nhau được.</p>
+    <p class="muted" style="margin:4px 0 10px">Phân quyền khai báo ở bảng Tài khoản đăng nhập và phân quyền ngay trên trang này.</p>
+    <button class="btn warn sm admin-only" onclick="wipeAll()">🔄 Tải lại toàn bộ từ Firebase</button>
+  </div>
+
+  </details>
+</section>
+
+<!-- ============ BÁO CÁO (Nhân lực · Thống kê · Biểu đồ) ============ -->
+<section class="view" id="v-rep">
+  <div class="card rep-bar" id="repBar"></div>
+  <div id="repBody"></div>
+</section>
+
+<!-- ============ DUYỆT ============ -->
+<section class="view" id="v-appr">
+  <div class="card" id="apprLock">
+    <h3>🔒 Khu vực quản lý</h3>
+    <p class="muted">Tài khoản của bạn chưa được cấp quyền duyệt đơn. Quản trị viên cấp quyền ở bảng Tài khoản đăng nhập và phân quyền trong tab Dữ liệu.</p>
+  </div>
+  <div id="apprBody" style="display:none">
+    <!-- 3 sub-tab: Danh sách đơn · Tổng quan (js/17-appr-sum.js) · Nhật ký tăng ca (js/15-report.js) -->
+    <div class="appr-tabs" id="apprTabs"></div>
+    <div class="card as-panel" id="apprSum" style="display:none"></div>
+    <!-- Bảng công tổng hợp + Biểu đồ (chuyển từ tab Báo cáo sang, js/15-report.js) -->
+    <div id="apprStats" style="display:none"></div>
+    <div id="apprChart" style="display:none"></div>
+    <div id="apprOtlog" style="display:none"></div>
+    <div id="apprListWrap">
+      <div class="card appr-bar" id="apprBar"></div>
+      <div class="appr-bulk" id="apprBulk"></div>
+      <div id="apprList"></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- cell edit modal -->
+<div class="mask" id="cellMask" onclick="if(event.target===this)closeCell()">
+  <div class="modal">
+    <h3 id="cellTitle">Sửa ca</h3>
+    <div class="codepick" id="cellPick"></div>
+    <div class="row" style="margin-top:13px">
+      <button class="btn sec" style="flex:1" onclick="setCell(null)">↩︎ Về ca chuẩn</button>
+      <button class="btn sec" style="flex:1" onclick="closeCell()">Đóng</button>
+    </div>
+    <!-- Đổi NHIỀU ngày liền cho chính người này — js/27-pattern.js. Đặt ngay
+         trong hộp sửa ô vì đó là lúc người dùng nhận ra "cả tháng phải đổi
+         chứ không riêng ngày này". -->
+    <div class="row" style="margin-top:8px">
+      <button class="btn sec" style="flex:1" onclick="patFromCell()"
+        title="Khai một chuỗi ca và đổi hàng loạt từ ngày này tới hết kỳ, cho riêng người này">🔁 Đổi nhiều ngày bằng pattern</button>
+    </div>
+  </div>
+</div>
+
+<!-- áp pattern vào ca thực tế (đổi hàng loạt nhiều ngày) — js/27-pattern.js -->
+<div class="mask" id="patMask" onclick="if(event.target===this)closePatBox()">
+  <!-- xwide: bảng xem trước có tới 31 cột ngày, khổ 560px của .modal cắt cụt. -->
+  <div class="modal xwide" id="patBody"></div>
+</div>
+
+<!-- ghi nhận sự kiện trên lịch (nhập tàu, bảo dưỡng…) — js/20-events.js -->
+<div class="mask" id="evMask" onclick="if(event.target===this)closeEventMgr()">
+  <div class="modal" id="evBody"></div>
+</div>
+
+<!-- khai nghỉ việc — js/28-stdshift.js -->
+<div class="mask" id="lvMask" onclick="if(event.target===this)closeLeaveBox()">
+  <div class="modal" id="lvBody"></div>
+</div>
+
+<!-- lịch nhập tàu nhiều phương án — js/25-vessel.js -->
+<div class="mask" id="vsMask" onclick="if(event.target===this)closeVesselMgr()">
+  <div class="modal xwide" id="vsBody"></div>
+</div>
+
+<!-- lịch đào tạo modal — js/22-training.js -->
+<div class="mask" id="trMask" onclick="if(event.target===this)closeTrainMgr()">
+  <!-- xwide: màn này có bảng người + bảng từng ngày, khổ 560px của .modal
+       thường cắt cụt tên nhân viên. Xem .modal.xwide trong css/ui.css. -->
+  <div class="modal xwide" id="trBody"></div>
+</div>
+
+<!-- email báo cáo modal -->
+<div class="mask" id="mailMask" onclick="if(event.target===this)closeMailReport()">
+  <div class="modal" id="mailBody"></div>
+</div>
+
+<!-- chọn / đổi người OT cover cho đơn nghỉ phép -->
+<div class="mask" id="coverMask" onclick="if(event.target===this)closeCoverPicker()">
+  <div class="modal" id="coverBody"></div>
+</div>
+
+<!-- đặt cơm tăng ca: bảng ngày × 4 bữa + chi tiết từng người -->
+<div class="mask" id="mealMask" onclick="if(event.target===this)closeMealPlan()">
+  <div class="modal wide" id="mealBody"></div>
+</div>
+
+<!-- bấm tên ở Bảng công tổng hợp → tổng hợp cả kỳ của một người -->
+<div class="mask" id="empSumMask" onclick="if(event.target===this)closeEmpSum()">
+  <div class="modal wide" id="empSumBody"></div>
+</div>
+
+<!-- print bulk modal (Duyệt) -->
+<div class="mask" id="printMask" onclick="if(event.target===this)closePrintBulk()">
+  <div class="modal">
+    <h3>🖨️ In đơn</h3>
+    <div class="row" style="gap:7px;margin-bottom:9px">
+      <input class="inp sm" id="pbSearchName" placeholder="Tìm theo tên nhân viên..." style="flex:1;min-width:150px" oninput="renderPrintBulkList(true)">
+      <label class="fl2">Từ</label><input type="date" class="inp sm" id="pbFrom" onchange="renderPrintBulkList()">
+      <label class="fl2">Đến</label><input type="date" class="inp sm" id="pbTo" onchange="renderPrintBulkList()">
+    </div>
+    <div class="fg"><label class="fl">Bố cục in</label><select class="inp" id="pbLayout">
+      <option value="a5">1 đơn/tờ A5 ngang — đúng chuẩn công ty (mặc định)</option>
+      <option value="2up">2 đơn/tờ A4 đứng — tiết kiệm giấy</option>
+    </select></div>
+    <p class="muted sm2" style="margin-bottom:7px">Đơn chưa in mặc định tích sẵn hết; đơn đã in rồi mặc định bỏ tích — tích lại nếu cần in bù.</p>
+    <div class="print-modal-list" id="pbList"></div>
+    <div class="hint" style="margin-top:10px" id="pbCountHint"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" style="flex:1" onclick="doPrintBulk()">🖨️ In</button>
+      <button class="btn sec" style="flex:1" onclick="closePrintBulk()">Đóng</button>
+    </div>
+  </div>
+</div>
+
+<!-- printable content, chỉ hiện khi @media print -->
+<div id="printRoot"></div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ============================================================
+     JAVASCRIPT — nap theo dung thu tu duoi day
+     config.js PHAI dung dau tien (khong co trong repo GitHub,
+     copy tu js/config.example.js)
+     ============================================================ -->
+<script src="js/config.js?v=100"></script>
+<script src="js/01-core.js?v=100"></script>
+<!-- i18n phai nap ngay sau 01-core (can bien LS) va truoc moi man hinh -->
+<script src="js/14-i18n.js?v=100"></script>
+<script src="js/00-icons.js?v=100"></script>
+<script src="js/02-storage.js?v=100"></script>
+<script src="js/03-nav.js?v=100"></script>
+<script src="js/04-schedule.js?v=100"></script>
+<script src="js/05-roster.js?v=100"></script>
+<script src="js/06-calendar.js?v=100"></script>
+<script src="js/07-manpower.js?v=100"></script>
+<script src="js/08-requests.js?v=100"></script>
+<script src="js/09-print.js?v=100"></script>
+<script src="js/10-account.js?v=100"></script>
+<script src="js/11-stats-data.js?v=100"></script>
+<script src="js/13-portal.js?v=100"></script>
+<script src="js/16-otlog-data.js?v=100"></script>
+<script src="js/15-report.js?v=100"></script>
+<script src="js/17-appr-sum.js?v=100"></script>
+<script src="js/18-advice.js?v=100"></script>
+<script src="js/19-meal.js?v=100"></script>
+<script src="js/20-events.js?v=100"></script>
+<script src="js/22-training.js?v=100"></script>
+<!-- Khoá đào tạo (gom nhiều buổi) + bảng tổng hợp — nạp SAU 22-training.js
+     vì dùng lại trAll/trSave/trHoursOfEmp… của file đó. -->
+<script src="js/23-course.js?v=100"></script>
+<!-- Tái cơ cấu nhóm khi có người nghỉ việc — nạp SAU 04-schedule (genForEmp,
+     parseShiftPattern) và SAU 13-portal (newNotif, notifDrop). -->
+<!-- Lịch nhập tàu nhiều phương án — mỗi phương án là một sự kiện trên lịch
+     nên phải nạp SAU 20-events.js. -->
+<script src="js/25-vessel.js?v=100"></script>
+<!-- Bảng nhân sự & lịch gộp 1 tab — ★ v9.3 -->
+<script src="js/28-stdshift.js?v=100"></script>
+<!-- Áp pattern vào ca THỰC TẾ (đổi hàng loạt nhiều ngày, tự ghi mã OT cho
+     ngày ca chuẩn là R mà phải đi làm). Nạp sau 28-stdshift.js. -->
+<script src="js/27-pattern.js?v=100"></script>
+<!-- Tên file cố tình KHÔNG chứa chữ "zalo": mạng công ty chặn mọi URL có tên
+     ứng dụng nhắn tin, file cũ js/21-zalo.js bị proxy cắt với lỗi HTTP 499. -->
+<script src="js/21-notify.js?v=100"></script>
+<script src="js/12-main.js?v=100"></script>
+
+</body>
+</html>
